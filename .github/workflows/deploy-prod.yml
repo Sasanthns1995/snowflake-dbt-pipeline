@@ -1,0 +1,75 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./dbt_cicd_project   # ⬅️ ADD THIS
+
+    environment: prod
+    env:
+      DBT_PROFILES_DIR: ./
+      DBT_TARGET: prod
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_PROD_USER: ${{ secrets.SNOWFLAKE_PROD_USER }}
+      SNOWFLAKE_PROD_DATABASE: ${{ secrets.SNOWFLAKE_PROD_DATABASE }}
+      SNOWFLAKE_PROD_PRIVATE_KEY_PATH: /tmp/snowflake_prod_key.p8
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dbt
+        run: |
+          uv venv
+          uv pip install dbt-snowflake
+
+      - name: Write PROD private key
+        run: |
+          mkdir -p $(dirname ${{ env.SNOWFLAKE_PROD_PRIVATE_KEY_PATH }})
+          echo "${{ secrets.SNOWFLAKE_PROD_PRIVATE_KEY }}" > ${{ env.SNOWFLAKE_PROD_PRIVATE_KEY_PATH }}
+          chmod 600 ${{ env.SNOWFLAKE_PROD_PRIVATE_KEY_PATH }}
+
+      - name: Write dbt profiles.yml
+        run: |
+          cat > ./profiles.yml <<'EOF'
+          dbt_project:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: ${{ env.SNOWFLAKE_ACCOUNT }}
+                user: ${{ env.SNOWFLAKE_PROD_USER }}
+                private_key_path: ${{ env.SNOWFLAKE_PROD_PRIVATE_KEY_PATH }}
+                database: ${{ env.SNOWFLAKE_PROD_DATABASE }}
+                warehouse: PROD_TRANSFORM_WH
+                role: SVC_TRANSFORM_PROD
+                schema: CRM_RAW
+                threads: 8
+          EOF
+
+      - name: dbt deps
+        run: uv run dbt deps
+
+      - name: dbt run (PROD)
+        run: uv run dbt run --target prod
+
+      - name: dbt test (PROD)
+        run: uv run dbt test --target prod
+
+      - name: dbt docs generate
+        run: uv run dbt docs generate --target prod
