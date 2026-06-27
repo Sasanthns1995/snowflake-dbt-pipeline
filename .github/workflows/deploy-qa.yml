@@ -1,0 +1,75 @@
+name: Deploy to QA
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
+  deploy-qa:
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./dbt_cicd_project   # ⬅️ ADD THIS
+
+    environment: qa
+    env:
+      DBT_PROFILES_DIR: ./
+      DBT_TARGET: qa
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_QA_USER: ${{ secrets.SNOWFLAKE_QA_USER }}
+      SNOWFLAKE_QA_DATABASE: ${{ secrets.SNOWFLAKE_QA_DATABASE }}
+      SNOWFLAKE_QA_PRIVATE_KEY_PATH: /tmp/snowflake_qa_key.p8
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dbt
+        run: |
+          uv venv
+          uv pip install dbt-snowflake
+
+      - name: Write QA private key
+        run: |
+          mkdir -p $(dirname ${{ env.SNOWFLAKE_QA_PRIVATE_KEY_PATH }})
+          echo "${{ secrets.SNOWFLAKE_QA_PRIVATE_KEY }}" > ${{ env.SNOWFLAKE_QA_PRIVATE_KEY_PATH }}
+          chmod 600 ${{ env.SNOWFLAKE_QA_PRIVATE_KEY_PATH }}
+
+      - name: Write dbt profiles.yml
+        run: |
+          cat > ./profiles.yml <<'EOF'
+          dbt_project:
+            target: qa
+            outputs:
+              qa:
+                type: snowflake
+                account: ${{ env.SNOWFLAKE_ACCOUNT }}
+                user: ${{ env.SNOWFLAKE_QA_USER }}
+                private_key_path: ${{ env.SNOWFLAKE_QA_PRIVATE_KEY_PATH }}
+                database: ${{ env.SNOWFLAKE_QA_DATABASE }}
+                warehouse: QA_TRANSFORM_WH
+                role: SVC_TRANSFORM_QA
+                schema: CRM_RAW
+                threads: 4
+          EOF
+
+      - name: dbt deps
+        run: uv run dbt deps
+
+      - name: dbt run (QA)
+        run: uv run dbt run --target qa
+
+      - name: dbt test (QA)
+        run: uv run dbt test --target qa
+
+      - name: dbt docs generate
+        run: uv run dbt docs generate --target qa
