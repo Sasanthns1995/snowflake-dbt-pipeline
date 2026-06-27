@@ -54,7 +54,7 @@ jobs:
       - name: Write dbt profiles.yml
         run: |
           cat > ./profiles.yml <<'EOF'
-          dbt_project:
+          dbt_cicd_project:
             target: ci
             outputs:
               ci:
